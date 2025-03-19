@@ -11,60 +11,63 @@ use tracing::{info, error, debug};
 use rand::Rng;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use tokio_tun::Tun;
+use tokio::io::AsyncWriteExt;
 
 pub struct WebSocketCamouflage {
     host: String,
     path: String,
     fake_server: String,
     buffer: Arc<Mutex<Vec<u8>>>,
+    tun_device: Arc<Tun>,
 }
 
 impl WebSocketCamouflage {
-    pub fn new(host: &str, path: &str) -> Self {
+    pub fn new(host: &str, path: &str, tun_device: Arc<Tun>) -> Self {
         WebSocketCamouflage {
             host: host.to_string(),
             path: path.to_string(),
-            fake_server: "nginx/1.20.1".to_string(), // Pretend to be nginx
+            fake_server: "nginx/1.20.1".to_string(),
             buffer: Arc::new(Mutex::new(Vec::new())),
+            tun_device,
         }
     }
 
     pub async fn handle_incoming(&self, mut stream: tokio::net::TcpStream) -> Result<()> {
-        // Create fake HTTP response headers
         let mut headers = HeaderMap::new();
         headers.insert("Server", HeaderValue::from_str(&self.fake_server)?);
         headers.insert("Date", HeaderValue::from_str(&httpdate::fmt_http_date(std::time::SystemTime::now()))?);
         
-        // Handle WebSocket upgrade
         if let Ok(mut ws_stream) = accept_async(stream).await {
             info!("WebSocket connection established");
             
-            // Main WebSocket communication loop
+            let tun_device = Arc::clone(&self.tun_device);
+            
             while let Ok(msg) = ws_stream.next().await {
                 match msg {
                     Message::Binary(data) => {
-                        // Store received data in buffer
                         let mut buffer = self.buffer.lock().await;
                         buffer.extend_from_slice(&data);
                         
-                        // Process VPN packets from buffer
                         self.process_buffer(&mut buffer).await?;
                     }
                     Message::Close(_) => {
                         info!("WebSocket connection closed by client");
                         break;
                     }
-                    _ => {} // Ignore other message types
+                    Message::Ping(data) => {
+                        ws_stream.send(Message::Pong(data)).await?;
+                    }
+                    _ => {}
                 }
             }
         } else {
-            // If not a WebSocket connection, respond with fake HTTP
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header("Server", &self.fake_server)
+                .header("Content-Type", "text/html")
                 .body("<!DOCTYPE html><html><head><title>Welcome to nginx!</title></head><body><h1>Welcome to nginx!</h1></body></html>")?;
             
-            // Send fake HTTP response
             stream.write_all(response.to_string().as_bytes()).await?;
         }
         
@@ -72,43 +75,48 @@ impl WebSocketCamouflage {
     }
 
     async fn process_buffer(&self, buffer: &mut Vec<u8>) -> Result<()> {
-        if buffer.len() < 4 {
-            return Ok(());
-        }
-
-        // Process VPN packets
-        let packet_size = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
-        if buffer.len() >= packet_size + 4 {
-            let packet = buffer[4..packet_size + 4].to_vec();
-            buffer.drain(0..packet_size + 4);
+        while buffer.len() >= 4 {
+            let packet_size = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
             
-            // Forward packet to TUN device
-            self.forward_to_tun(&packet).await?;
+            if buffer.len() >= packet_size + 4 {
+                let packet = buffer[4..packet_size + 4].to_vec();
+                buffer.drain(0..packet_size + 4);
+                
+                self.forward_to_tun(&packet).await?;
+            } else {
+                break;
+            }
         }
-
         Ok(())
     }
 
     async fn forward_to_tun(&self, packet: &[u8]) -> Result<()> {
-        // Add random delay to make traffic pattern less predictable
+        // Add random delay for traffic pattern obfuscation
         let delay = rand::thread_rng().gen_range(10..50);
         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
 
-        // Add random padding to mask real packet size
+        // Add random padding
         let mut padded_packet = packet.to_vec();
         let padding_size = rand::thread_rng().gen_range(16..64);
         padded_packet.extend(std::iter::repeat(0).take(padding_size));
 
-        // TODO: Forward to TUN device
-        // self.tun_device.write(&padded_packet).await?;
-
-        Ok(())
+        // Forward to TUN device with error handling
+        match self.tun_device.send(&padded_packet).await {
+            Ok(_) => {
+                debug!("Successfully forwarded {} bytes to TUN device", padded_packet.len());
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to forward packet to TUN device: {}", e);
+                Err(anyhow::anyhow!("TUN device write error: {}", e))
+            }
+        }
     }
 
     pub async fn send_packet(&self, packet: &[u8]) -> Result<()> {
         let mut buffer = self.buffer.lock().await;
         
-        // Add packet size header
+        // Add length prefix
         let size = packet.len() as u32;
         buffer.extend_from_slice(&size.to_be_bytes());
         buffer.extend_from_slice(packet);
@@ -116,7 +124,6 @@ impl WebSocketCamouflage {
         Ok(())
     }
 
-    // Generate random WebSocket key for client simulation
     fn generate_ws_key() -> String {
         let mut rng = rand::thread_rng();
         let mut key = vec![0u8; 16];

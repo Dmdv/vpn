@@ -19,31 +19,33 @@ use tokio::net::TcpListener;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::net::IpAddr;
+use parking_lot::RwLock as PlRwLock;
+use dashmap::DashMap;
 
 pub struct Server {
-    config: Config,
+    config: Arc<Config>,
     tunnel_manager: Arc<RwLock<TunnelManager>>,
     crypto_manager: Arc<CryptoManager>,
     auth_manager: Arc<AuthManager>,
     metrics_manager: Arc<MetricsManager>,
+    profile_cache: Arc<DashMap<Uuid, ProfileResponse>>,
 }
 
 impl Server {
     pub fn new(config: Config) -> Self {
-        let crypto_manager = Arc::new(CryptoManager::new(config.key_rotation_interval));
-        let auth_manager = Arc::new(AuthManager::new(
-            config.jwt_secret.clone(),
-            config.session_timeout as i64,
-        ));
-        let metrics_manager = Arc::new(MetricsManager::new());
-        let tunnel_manager = Arc::new(RwLock::new(TunnelManager::new(&config)));
-
+        let config = Arc::new(config);
+        let profile_cache = Arc::new(DashMap::new());
+        
         Server {
-            config,
-            tunnel_manager,
-            crypto_manager,
-            auth_manager,
-            metrics_manager,
+            config: config.clone(),
+            tunnel_manager: Arc::new(RwLock::new(TunnelManager::new(&config))),
+            crypto_manager: Arc::new(CryptoManager::new(config.key_rotation_interval)),
+            auth_manager: Arc::new(AuthManager::new(
+                config.jwt_secret.clone(),
+                config.session_timeout as i64,
+            )),
+            metrics_manager: Arc::new(MetricsManager::new()),
+            profile_cache,
         }
     }
 
@@ -78,10 +80,12 @@ impl Server {
 
     async fn start_api_server(&self) -> Result<()> {
         let app_state = Arc::new(AppState {
+            config: self.config.clone(),
             tunnel_manager: self.tunnel_manager.clone(),
             crypto_manager: self.crypto_manager.clone(),
             auth_manager: self.auth_manager.clone(),
             metrics_manager: self.metrics_manager.clone(),
+            profile_cache: self.profile_cache.clone(),
         });
 
         let app = Router::new()
@@ -104,10 +108,12 @@ impl Server {
 
 #[derive(Clone)]
 struct AppState {
+    config: Arc<Config>,
     tunnel_manager: Arc<RwLock<TunnelManager>>,
     crypto_manager: Arc<CryptoManager>,
     auth_manager: Arc<AuthManager>,
     metrics_manager: Arc<MetricsManager>,
+    profile_cache: Arc<DashMap<Uuid, ProfileResponse>>,
 }
 
 async fn health_check() -> &'static str {
@@ -145,20 +151,25 @@ async fn generate_profile(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ProfileRequest>,
 ) -> impl IntoResponse {
-    // Generate a unique ID for this profile
     let profile_id = Uuid::new_v4();
     
-    // Create a new client in the tunnel manager
-    let client_ip = allocate_client_ip(&state).await;
-    
-    if let Err(e) = state.tunnel_manager.write().await.add_client(profile_id, client_ip).await {
-        error!("Failed to add client: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": "Failed to create client"
-        }))).into_response();
-    }
+    // Minimize time spent in write lock
+    let client_ip = {
+        let tunnel_manager = state.tunnel_manager.write().await;
+        tunnel_manager.add_client(profile_id).await
+    };
 
-    // Create FoxRay configuration
+    let client_ip = match client_ip {
+        Ok(ip) => ip,
+        Err(e) => {
+            error!("Failed to add client: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": "Failed to create client"
+            }))).into_response();
+        }
+    };
+
+    // Create config without holding the lock
     let config = FoxRayConfig {
         name: request.device_name,
         server: state.config.host.clone(),
@@ -169,13 +180,16 @@ async fn generate_profile(
         network: state.config.get_subnet_network().unwrap().to_string(),
         dns: state.config.dns_servers.clone(),
         mtu: state.config.mtu,
-        routes: vec!["0.0.0.0/0".to_string()], // Route all traffic through VPN
+        routes: vec!["0.0.0.0/0".to_string()],
     };
 
     let response = ProfileResponse {
         profile_id: profile_id.to_string(),
         config,
     };
+
+    // Cache the profile
+    state.profile_cache.insert(profile_id, response.clone());
 
     (StatusCode::OK, Json(response)).into_response()
 }

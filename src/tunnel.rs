@@ -53,9 +53,11 @@ impl TunnelManager {
 
         // Create WebSocket camouflage
         let camouflage = if config.camouflage.enabled {
+            let tun_clone = Arc::clone(&Arc::new(tun));
             Some(WebSocketCamouflage::new(
                 &config.camouflage.host,
                 &config.camouflage.path,
+                tun_clone,
             ))
         } else {
             None
