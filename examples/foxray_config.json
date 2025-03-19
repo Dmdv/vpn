@@ -1,0 +1,39 @@
+{
+    "name": "my-laptop",
+    "server": "vpn.example.com",
+    "port": 8080,
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    
+    // Encryption settings
+    "encryption": "aes-256-gcm",
+    "protocol": "ws",  // WebSocket for better obfuscation
+    
+    // Network settings
+    "network": "10.10.1.0/24",
+    "mtu": 1500,
+    "dns": [
+        "1.1.1.1",    // Cloudflare DNS
+        "8.8.8.8"     // Google DNS
+    ],
+    
+    // Routing rules
+    "routes": [
+        "0.0.0.0/0"   // Route all traffic through VPN
+    ],
+    
+    // Optional advanced settings
+    "ws-path": "/ws",          // WebSocket path
+    "ws-host": "example.com",  // WebSocket Host header
+    "keepalive": 25,           // Keepalive interval in seconds
+    "concurrency": 1,          // Number of concurrent connections
+    
+    // Traffic obfuscation
+    "camouflage": {
+        "type": "websocket",
+        "host": "www.microsoft.com",
+        "fake-headers": {
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Language": "en-US"
+        }
+    }
+} 
