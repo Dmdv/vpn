@@ -16,6 +16,7 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ## Provider Support
 
 ### Built-in Providers
+
 - **Direct TCP Provider**
   - Raw TCP connections with TLS
   - Connection pooling and compression
@@ -54,6 +55,7 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
    - Connection redundancy
 
 4. **Provider Configuration**
+
 ```json
 {
   "providers": {
@@ -91,6 +93,7 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ### Traffic Obfuscation
 
 1. **Shadowsocks Integration**
+
 ```rust
 // In config.json
 {
@@ -103,9 +106,11 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 2. **Traffic Camouflage**
+
 - HTTP Header Simulation
 - TLS Traffic Mimicry
 - WebSocket Wrapping
+
 ```rust
 // In config.json
 {
@@ -118,9 +123,11 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 3. **Protocol Transformations**
+
 - V2Ray Plugin Support
 - OBFS4 Integration
 - SNI Spoofing
+
 ```rust
 // In config.json
 {
@@ -137,8 +144,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ### Traffic Optimization
 
 1. **Compression**
+
 - LZ4 Fast Compression
 - ZSTD Advanced Compression
+
 ```rust
 // In config.json
 {
@@ -151,9 +160,11 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 2. **TCP Optimization**
+
 - BBR Congestion Control
 - TCP Fast Open
 - Custom TCP Parameters
+
 ```rust
 // In config.json
 {
@@ -167,8 +178,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 3. **Multi-Path TCP**
+
 - Load Balancing
 - Connection Redundancy
+
 ```rust
 // In config.json
 {
@@ -183,8 +196,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ### Traffic Analysis Prevention
 
 1. **Packet Size Normalization**
+
 - Fixed Packet Sizes
 - Random Padding
+
 ```rust
 // In config.json
 {
@@ -197,8 +212,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 2. **Timing Obfuscation**
+
 - Random Delays
 - Traffic Pattern Masking
+
 ```rust
 // In config.json
 {
@@ -211,8 +228,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 3. **Split Routing**
+
 - Per-App Routing
 - Domain-Based Routing
+
 ```rust
 // In config.json
 {
@@ -229,8 +248,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ### Anti-Censorship Features
 
 1. **Domain Fronting**
+
 - CDN-based Fronting
 - Custom Domain Support
+
 ```rust
 // In config.json
 {
@@ -244,8 +265,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 2. **Bridge Mode**
+
 - Meek Bridge Support
 - Snowflake Integration
+
 ```rust
 // In config.json
 {
@@ -260,8 +283,10 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ```
 
 3. **Active Probing Resistance**
+
 - Protocol Verification
 - Handshake Obfuscation
+
 ```rust
 // In config.json
 {
@@ -276,6 +301,7 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 ### Implementation Notes
 
 1. **Enabling Features**:
+
 ```bash
 # Install additional dependencies
 apt install -y \
@@ -287,16 +313,19 @@ apt install -y \
 ```
 
 2. **Performance Impact**:
+
 - Obfuscation features may increase latency
 - Compression can help with slow connections
 - Monitor CPU usage when enabling multiple features
 
 3. **Security Considerations**:
+
 - Some features may weaken security if misconfigured
 - Regular auditing of enabled features
 - Keep all components updated
 
 4. **Compatibility**:
+
 - Not all features work with all clients
 - Test thoroughly before deployment
 - Document supported features for users
@@ -344,6 +373,7 @@ doctl compute firewall create \
 ### 4. Network Configuration
 
 The VPN server uses the following IP ranges by default:
+
 - VPC Network: `10.10.0.0/16`
 - VPN Subnet: `10.10.1.0/24`
 - Server VPN IP: `10.10.1.1`
@@ -354,23 +384,27 @@ You can modify these in `config.rs` if needed.
 ## Installation
 
 1. SSH into your Droplet:
+
 ```bash
 ssh root@your-droplet-ip
 ```
 
 2. Install Rust:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
 3. Install dependencies:
+
 ```bash
 apt update
 apt install -y build-essential pkg-config libssl-dev
 ```
 
 4. Clone and build:
+
 ```bash
 git clone https://github.com/yourusername/vpn-server
 cd vpn-server
@@ -409,6 +443,7 @@ Create a configuration file at `config.json`:
 ### Creating Custom Providers
 
 1. Implement the Provider trait:
+
 ```rust
 #[async_trait]
 pub trait Provider: Send + Sync {
@@ -421,6 +456,7 @@ pub trait Provider: Send + Sync {
 ```
 
 2. Register your provider:
+
 ```rust
 pub fn register_provider(name: &str, provider: Box<dyn Provider>) {
     PROVIDERS.write().insert(name.to_string(), provider);
@@ -447,6 +483,7 @@ pub fn register_provider(name: &str, provider: Box<dyn Provider>) {
    - Follow security best practices
 
 4. **Testing**
+
 ```bash
 # Run provider tests
 cargo test --features provider-tests
@@ -470,6 +507,7 @@ sudo nano /etc/systemd/system/vpn-server.service
 ```
 
 Add:
+
 ```ini
 [Unit]
 Description=VPN Server
@@ -486,6 +524,7 @@ WantedBy=multi-user.target
 ```
 
 Enable and start:
+
 ```bash
 sudo systemctl enable vpn-server
 sudo systemctl start vpn-server
@@ -494,6 +533,7 @@ sudo systemctl start vpn-server
 ## Client Setup
 
 1. Generate a client profile:
+
 ```bash
 curl -X POST http://your-server:8080/profile/generate \
   -H "Content-Type: application/json" \
@@ -508,11 +548,13 @@ curl -X POST http://your-server:8080/profile/generate \
 ## Monitoring
 
 Check server status:
+
 ```bash
 curl http://your-server:8080/status
 ```
 
 View connected clients:
+
 ```bash
 curl http://your-server:8080/clients
 ```
@@ -532,6 +574,7 @@ While this guide focuses on Digital Ocean, the VPN server can be deployed on any
 ### Linode/Akamai Cloud
 
 Similar setup to Digital Ocean with competitive pricing:
+
 ```bash
 # Install Linode CLI
 curl -L https://raw.githubusercontent.com/linode/linode-cli/master/linode-cli.sh | sudo bash
@@ -551,6 +594,7 @@ linode-cli linodes create \
 ### Vultr
 
 Known for high performance and global presence:
+
 ```bash
 # Install Vultr CLI
 curl -L https://github.com/vultr/vultr-cli/releases/latest/download/vultr-cli_Linux_x86_64.tar.gz | tar xz
@@ -566,6 +610,7 @@ vultr-cli instance create \
 ### AWS Lightsail
 
 Amazon's simplified VPS offering:
+
 ```bash
 # Install AWS CLI
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -582,6 +627,7 @@ aws lightsail create-instances \
 ### Oracle Cloud (Free Tier Available)
 
 Offers generous free tier with 2 AMD-based VMs:
+
 - Sign up at cloud.oracle.com
 - Create a VM.Standard.A1.Flex instance (24GB RAM, 4 OCPUs free)
 - Use the web interface or OCI CLI for setup
@@ -589,6 +635,7 @@ Offers generous free tier with 2 AMD-based VMs:
 ### Hetzner Cloud
 
 European provider with excellent price/performance:
+
 ```bash
 # Install hcloud CLI
 wget -O hcloud.tar.gz https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz
@@ -605,6 +652,7 @@ hcloud server create \
 ### Network Configuration Notes
 
 For all providers:
+
 1. Ensure your chosen provider allows TUN/TAP devices
 2. Check if custom VPC/private networking is supported
 3. Configure provider's firewall rules similar to Digital Ocean example
@@ -614,6 +662,7 @@ For all providers:
 ### Provider Selection Criteria
 
 Choose based on your needs:
+
 - **Cost**: Oracle Cloud (free tier), Hetzner (budget)
 - **Performance**: Vultr, Linode (high performance)
 - **Global Presence**: AWS Lightsail, Digital Ocean (many regions)
@@ -622,4 +671,4 @@ Choose based on your needs:
 
 ## License
 
-MIT 
+MIT
