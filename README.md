@@ -13,6 +13,79 @@ A high-performance VPN server written in Rust, designed to run on Digital Ocean 
 - Automatic key rotation
 - Rate limiting support
 
+## Provider Support
+
+### Built-in Providers
+- **Direct TCP Provider**
+  - Raw TCP connections with TLS
+  - Connection pooling and compression
+  - TCP optimizations (BBR, Fast Open)
+
+- **WebSocket Provider**
+  - WebSocket over TLS
+  - Browser-like traffic patterns
+  - Custom headers and paths
+  - CDN compatibility
+
+- **HTTP Provider**
+  - HTTP/HTTPS tunneling
+  - Request/response simulation
+  - Header manipulation
+  - Domain fronting support
+
+### Provider Features
+
+1. **Traffic Obfuscation**
+   - Packet padding and normalization
+   - Timing randomization
+   - Protocol transformation
+   - Header simulation
+
+2. **Domain Fronting**
+   - CDN-based fronting
+   - SNI spoofing
+   - Host header modification
+   - Multiple provider support
+
+3. **Load Balancing**
+   - Multiple endpoint support
+   - Health checking
+   - Automatic failover
+   - Connection redundancy
+
+4. **Provider Configuration**
+```json
+{
+  "providers": {
+    "websocket": {
+      "enabled": true,
+      "host": "example.com",
+      "path": "/ws",
+      "headers": {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/json"
+      },
+      "tls": true,
+      "compression": true
+    },
+    "http": {
+      "enabled": true,
+      "host": "cdn.example.com",
+      "path": "/data",
+      "domain_fronting": true,
+      "front_domain": "www.googleapis.com"
+    },
+    "tcp": {
+      "enabled": true,
+      "port": 443,
+      "tls": true,
+      "bbr_enabled": true,
+      "fast_open": true
+    }
+  }
+}
+```
+
 ## Advanced Traffic Features
 
 ### Traffic Obfuscation
@@ -329,6 +402,57 @@ Create a configuration file at `config.json`:
   "client_ip_start": "10.10.1.2",
   "client_ip_end": "10.10.1.254"
 }
+```
+
+## Provider Development
+
+### Creating Custom Providers
+
+1. Implement the Provider trait:
+```rust
+#[async_trait]
+pub trait Provider: Send + Sync {
+    async fn init(&self) -> Result<()>;
+    async fn connect(&self) -> Result<Box<dyn Tunnel>>;
+    async fn handle_connection<T>(&self, stream: T) -> Result<Box<dyn Tunnel>>
+    where
+        T: AsyncRead + AsyncWrite + Send + Sync + 'static;
+}
+```
+
+2. Register your provider:
+```rust
+pub fn register_provider(name: &str, provider: Box<dyn Provider>) {
+    PROVIDERS.write().insert(name.to_string(), provider);
+}
+```
+
+### Provider Guidelines
+
+1. **Error Handling**
+   - Implement proper error types
+   - Handle connection failures gracefully
+   - Provide detailed error messages
+
+2. **Performance**
+   - Use connection pooling
+   - Implement compression
+   - Optimize buffer sizes
+   - Monitor resource usage
+
+3. **Security**
+   - Implement TLS with proper verification
+   - Use certificate pinning
+   - Add traffic obfuscation
+   - Follow security best practices
+
+4. **Testing**
+```bash
+# Run provider tests
+cargo test --features provider-tests
+
+# Test specific provider
+cargo test --test websocket_provider
 ```
 
 ## Running
