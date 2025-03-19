@@ -37,6 +37,18 @@ pub struct Config {
     pub server_vpn_ip: String,      // e.g. "10.10.1.1"
     pub client_ip_start: String,    // e.g. "10.10.1.2"
     pub client_ip_end: String,      // e.g. "10.10.1.254"
+
+    // Camouflage configuration
+    pub camouflage: CamouflageConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CamouflageConfig {
+    pub enabled: bool,
+    pub type_: String,  // "websocket", "http", or "tls"
+    pub host: String,
+    pub path: String,
+    pub fake_server: Option<String>,
 }
 
 impl Default for Config {
@@ -61,6 +73,13 @@ impl Default for Config {
             server_vpn_ip: "10.10.1.1".to_string(),
             client_ip_start: "10.10.1.2".to_string(),
             client_ip_end: "10.10.1.254".to_string(),
+            camouflage: CamouflageConfig {
+                enabled: false,
+                type_: "websocket".to_string(),
+                host: "www.example.com".to_string(),
+                path: "/ws".to_string(),
+                fake_server: Some("nginx/1.20.1".to_string()),
+            },
         }
     }
 }

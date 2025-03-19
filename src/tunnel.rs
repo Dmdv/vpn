@@ -10,6 +10,7 @@ use tokio_tun::Tun;
 use futures::StreamExt;
 use bytes::{Buf, BytesMut};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use crate::camouflage::WebSocketCamouflage;
 
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
@@ -27,6 +28,7 @@ pub struct TunnelManager {
     config: Config,
     clients: Arc<Mutex<HashMap<Uuid, ClientInfo>>>,
     tun_device: Arc<Tun>,
+    camouflage: Option<WebSocketCamouflage>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,10 +51,21 @@ impl TunnelManager {
             .pop()
             .expect("No TUN device created");
 
+        // Create WebSocket camouflage
+        let camouflage = if config.camouflage.enabled {
+            Some(WebSocketCamouflage::new(
+                &config.camouflage.host,
+                &config.camouflage.path,
+            ))
+        } else {
+            None
+        };
+
         TunnelManager {
             config: config.clone(),
             clients: Arc::new(Mutex::new(HashMap::new())),
             tun_device: Arc::new(tun),
+            camouflage,
         }
     }
 
@@ -131,9 +144,14 @@ impl TunnelManager {
                 client.last_seen = chrono::Utc::now();
                 client.bytes_rx += packet.len() as u64;
 
-                // Forward the packet to the client
-                if let Err(e) = self.tun_device.send(packet).await {
-                    error!("Failed to forward packet to client {}: {}", client.id, e);
+                // If camouflage is enabled, wrap packet in WebSocket
+                if let Some(camouflage) = &self.camouflage {
+                    camouflage.send_packet(packet).await?;
+                } else {
+                    // Forward the packet directly
+                    if let Err(e) = self.tun_device.send(packet).await {
+                        error!("Failed to forward packet to client {}: {}", client.id, e);
+                    }
                 }
             }
             None => {
