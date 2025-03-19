@@ -31,3 +31,9 @@ tokio-tungstenite = "0.20"
 tungstenite = "0.20"
 http = "0.2"
 headers = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+tokio-test = "0.4"
+test-log = "0.2"
+env_logger = "0.10"

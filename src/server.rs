@@ -225,4 +225,93 @@ async fn get_metrics(
     Json(serde_json::json!({
         "server_metrics": metrics
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+    use std::str::FromStr;
+
+    fn create_test_config() -> Config {
+        Config {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            api_port: 8081,
+            subnet: "10.8.0.0/24".to_string(),
+            dns_servers: vec!["1.1.1.1".to_string()],
+            mtu: 1500,
+            encryption_method: "aes-256-gcm".to_string(),
+            key_rotation_interval: 24,
+            jwt_secret: "test-secret".to_string(),
+            session_timeout: 1440,
+            max_clients: 100,
+            log_level: "debug".to_string(),
+            enable_traffic_logging: true,
+            bandwidth_limit_mbps: 100,
+            vpc_network: "10.10.0.0/16".to_string(),
+            vpn_subnet: "10.10.1.0/24".to_string(),
+            server_vpn_ip: "10.10.1.1".to_string(),
+            client_ip_start: "10.10.1.2".to_string(),
+            client_ip_end: "10.10.1.254".to_string(),
+            camouflage: CamouflageConfig {
+                enabled: false,
+                type_: "websocket".to_string(),
+                host: "example.com".to_string(),
+                path: "/ws".to_string(),
+                fake_server: Some("nginx/1.20.1".to_string()),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_server_initialization() {
+        let config = create_test_config();
+        let server = Server::new(config);
+        assert!(server.tunnel_manager.try_read().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_profile_generation() {
+        let config = create_test_config();
+        let server = Server::new(config);
+        let app_state = Arc::new(AppState {
+            config: server.config.clone(),
+            tunnel_manager: server.tunnel_manager.clone(),
+            crypto_manager: server.crypto_manager.clone(),
+            auth_manager: server.auth_manager.clone(),
+            metrics_manager: server.metrics_manager.clone(),
+            profile_cache: server.profile_cache.clone(),
+        });
+
+        let request = ProfileRequest {
+            device_name: "test-device".to_string(),
+            preferred_protocol: Some("tcp".to_string()),
+        };
+
+        let response = generate_profile(State(app_state), Json(request)).await;
+        assert!(response.into_response().status() == StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_check() {
+        assert_eq!(health_check().await, "OK");
+    }
+
+    #[tokio::test]
+    async fn test_metrics() {
+        let config = create_test_config();
+        let server = Server::new(config);
+        let app_state = Arc::new(AppState {
+            config: server.config.clone(),
+            tunnel_manager: server.tunnel_manager.clone(),
+            crypto_manager: server.crypto_manager.clone(),
+            auth_manager: server.auth_manager.clone(),
+            metrics_manager: server.metrics_manager.clone(),
+            profile_cache: server.profile_cache.clone(),
+        });
+
+        let metrics = get_metrics(State(app_state)).await;
+        assert!(metrics.0.get("server_metrics").is_some());
+    }
 } 
