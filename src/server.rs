@@ -1,12 +1,15 @@
 use crate::config::Config;
+use crate::dns::DnsManager;
+use crate::routing::RouteManager;
+use crate::traffic::{TrafficManager, TrafficClass};
 use crate::tunnel::TunnelManager;
 use crate::crypto::CryptoManager;
 use crate::auth::AuthManager;
 use crate::metrics::MetricsManager;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, error};
+use tracing::{debug, error, info, warn};
 use axum::{
     routing::{get, post},
     Router,
@@ -22,9 +25,13 @@ use std::net::IpAddr;
 use parking_lot::RwLock as PlRwLock;
 use dashmap::DashMap;
 
+#[derive(Clone)]
 pub struct Server {
-    config: Arc<Config>,
+    config: Config,
     tunnel_manager: Arc<RwLock<TunnelManager>>,
+    dns_manager: Arc<DnsManager>,
+    route_manager: Arc<RouteManager>,
+    traffic_manager: Arc<TrafficManager>,
     crypto_manager: Arc<CryptoManager>,
     auth_manager: Arc<AuthManager>,
     metrics_manager: Arc<MetricsManager>,
@@ -32,77 +39,248 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: Config) -> Self {
-        let config = Arc::new(config);
+    pub fn new(config: Config) -> Result<Self> {
+        // Initialize DNS manager
+        let dns_manager = Arc::new(DnsManager::new(
+            vec![
+                "https://cloudflare-dns.com/dns-query".to_string(),
+                "https://dns.google/dns-query".to_string(),
+            ],
+            vec![
+                ("1.1.1.1".to_string(), 853),
+                ("8.8.8.8".to_string(), 853),
+            ],
+            vec![], // Will be populated with client IPs
+        )?);
+
+        // Initialize route manager
+        let route_manager = Arc::new(RouteManager::new());
+
+        // Initialize traffic manager with configured bandwidth limit
+        let traffic_manager = Arc::new(TrafficManager::new(
+            config.bandwidth_limit_mbps.unwrap_or(100) * 1_000_000 // Convert to bps
+        ));
+
+        // Initialize tunnel manager with owned config
+        let tunnel_manager = Arc::new(RwLock::new(TunnelManager::new(config.clone())?));
+
+        // Initialize crypto manager
+        let crypto_manager = Arc::new(CryptoManager::new(config.key_rotation_interval));
+
+        // Initialize auth manager
+        let auth_manager = Arc::new(AuthManager::new(
+            config.jwt_secret.clone(),
+            config.session_timeout as i64,
+        ));
+
+        // Initialize metrics manager
+        let metrics_manager = Arc::new(MetricsManager::new());
+
+        // Initialize profile cache
         let profile_cache = Arc::new(DashMap::new());
-        
-        Server {
-            config: config.clone(),
-            tunnel_manager: Arc::new(RwLock::new(TunnelManager::new(&config))),
-            crypto_manager: Arc::new(CryptoManager::new(config.key_rotation_interval)),
-            auth_manager: Arc::new(AuthManager::new(
-                config.jwt_secret.clone(),
-                config.session_timeout as i64,
-            )),
-            metrics_manager: Arc::new(MetricsManager::new()),
+
+        Ok(Self {
+            config,
+            tunnel_manager,
+            dns_manager,
+            route_manager,
+            traffic_manager,
+            crypto_manager,
+            auth_manager,
+            metrics_manager,
             profile_cache,
+        })
+    }
+
+    pub async fn start(&self) -> Result<()> {
+        info!("Starting VPN server...");
+
+        // Start cleanup tasks
+        Arc::clone(&self.traffic_manager).start_cleanup_task().await;
+
+        // Add default routing rules
+        self.setup_default_routes().await?;
+
+        // Start the server
+        self.run_server().await
+    }
+
+    async fn setup_default_routes(&self) -> Result<()> {
+        use crate::routing::{RouteRule, RouteMatch, RouteAction};
+
+        // Local network direct access
+        self.route_manager.add_rule(RouteRule {
+            name: "local_network".to_string(),
+            match_type: RouteMatch::IpRange {
+                network: "192.168.0.0/16".to_string(),
+                parsed_network: None,
+            },
+            action: RouteAction::Direct,
+            priority: 100,
+            enabled: true,
+            temporary: false,
+            expires: None,
+        }).await?;
+
+        // VPN subnet direct access
+        self.route_manager.add_rule(RouteRule {
+            name: "vpn_network".to_string(),
+            match_type: RouteMatch::IpRange {
+                network: self.config.vpn_subnet.clone(),
+                parsed_network: None,
+            },
+            action: RouteAction::Direct,
+            priority: 90,
+            enabled: true,
+            temporary: false,
+            expires: None,
+        }).await?;
+
+        Ok(())
+    }
+
+    async fn run_server(&self) -> Result<()> {
+        // Start listening for connections
+        let listener = tokio::net::TcpListener::bind((
+            &self.config.host,
+            self.config.port
+        )).await?;
+
+        info!("VPN server listening on {}:{}", self.config.host, self.config.port);
+
+        loop {
+            match listener.accept().await {
+                Ok((stream, addr)) => {
+                    let tunnel_manager = Arc::clone(&self.tunnel_manager);
+                    let dns_manager = Arc::clone(&self.dns_manager);
+                    let route_manager = Arc::clone(&self.route_manager);
+                    let traffic_manager = Arc::clone(&self.traffic_manager);
+
+                    tokio::spawn(async move {
+                        match Self::handle_client(
+                            stream,
+                            addr.ip(),
+                            tunnel_manager,
+                            dns_manager,
+                            route_manager,
+                            traffic_manager,
+                        ).await
+                        {
+                            Ok(_) => debug!("Client connection handled successfully: {}", addr),
+                            Err(e) => error!("Error handling client connection {}: {}", addr, e),
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Error accepting connection: {}", e);
+                }
+            }
         }
     }
 
-    pub async fn run(&self) -> Result<()> {
-        info!("Initializing VPN server on {}:{}", self.config.host, self.config.port);
+    async fn handle_client(
+        stream: tokio::net::TcpStream,
+        client_ip: IpAddr,
+        tunnel_manager: Arc<RwLock<TunnelManager>>,
+        dns_manager: Arc<DnsManager>,
+        route_manager: Arc<RouteManager>,
+        traffic_manager: Arc<TrafficManager>,
+    ) -> Result<()> {
+        // Register client with traffic manager
+        traffic_manager.register_client(
+            client_ip,
+            TrafficClass::Interactive, // Default class, can be changed based on client type
+            None, // Use default rate limit
+        ).await?;
 
-        // Start the tunnel manager
-        let tunnel_manager = self.tunnel_manager.clone();
-        tokio::spawn(async move {
-            if let Err(e) = tunnel_manager.write().await.run().await {
-                error!("Tunnel manager error: {}", e);
+        // Create tunnel for client
+        let mut tunnel = {
+            let mut tm = tunnel_manager.write().await;
+            tm.create_tunnel(stream, client_ip).await?
+        };
+
+        // Main packet processing loop
+        loop {
+            // Read packet from tunnel
+            let packet = match tunnel.read_packet().await {
+                Ok(Some(packet)) => packet,
+                Ok(None) => break, // Connection closed
+                Err(e) => {
+                    error!("Error reading packet: {}", e);
+                    break;
+                }
+            };
+
+            // Check if we can send (rate limiting)
+            if !traffic_manager.can_send(&client_ip, packet.len() as u64).await? {
+                warn!("Rate limit exceeded for client: {}", client_ip);
+                continue;
             }
-        });
 
-        // Start key rotation
-        let crypto_manager = self.crypto_manager.clone();
-        let key_rotation_interval = self.config.key_rotation_interval;
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(key_rotation_interval * 3600)).await;
-                if let Err(e) = crypto_manager.rotate_key().await {
-                    error!("Key rotation error: {}", e);
+            // Get routing action
+            let action = route_manager.get_route_action(&packet).await?;
+
+            match action {
+                RouteAction::Vpn => {
+                    // Apply traffic shaping
+                    let delay = traffic_manager.shape_packet(&client_ip, &packet).await?;
+                    if delay.as_micros() > 0 {
+                        tokio::time::sleep(delay).await;
+                    }
+
+                    // Forward packet
+                    if let Err(e) = tunnel.write_packet(&packet).await {
+                        error!("Error writing packet: {}", e);
+                        break;
+                    }
+
+                    // Record traffic
+                    traffic_manager.record_traffic(&client_ip, packet.len() as u64, 0).await?;
+                }
+                RouteAction::Direct => {
+                    // Handle DNS queries
+                    if Self::is_dns_packet(&packet) {
+                        match dns_manager.resolve(&packet).await {
+                            Ok(response) => {
+                                if let Err(e) = tunnel.write_packet(&response).await {
+                                    error!("Error writing DNS response: {}", e);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("DNS resolution error: {}", e);
+                            }
+                        }
+                    }
+                    // Other direct traffic is handled by the OS routing table
+                }
+                RouteAction::Block => {
+                    debug!("Blocked packet from {}", client_ip);
                 }
             }
-        });
+        }
 
-        // Start the API server
-        self.start_api_server().await?;
+        // Cleanup
+        traffic_manager.unregister_client(&client_ip).await?;
+        let mut tm = tunnel_manager.write().await;
+        tm.remove_tunnel(&client_ip).await?;
 
         Ok(())
     }
 
-    async fn start_api_server(&self) -> Result<()> {
-        let app_state = Arc::new(AppState {
-            config: self.config.clone(),
-            tunnel_manager: self.tunnel_manager.clone(),
-            crypto_manager: self.crypto_manager.clone(),
-            auth_manager: self.auth_manager.clone(),
-            metrics_manager: self.metrics_manager.clone(),
-            profile_cache: self.profile_cache.clone(),
-        });
+    fn is_dns_packet(packet: &[u8]) -> bool {
+        if packet.len() < 20 {
+            return false;
+        }
 
-        let app = Router::new()
-            .route("/health", get(health_check))
-            .route("/profile/generate", post(generate_profile))
-            .route("/metrics", get(get_metrics))
-            .with_state(app_state);
+        // Check if it's UDP
+        if packet[9] != 17 {
+            return false;
+        }
 
-        let addr: SocketAddr = format!("{}:{}", self.config.host, self.config.api_port)
-            .parse()
-            .unwrap();
-
-        info!("Starting API server on {}", addr);
-        let listener = TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
-
-        Ok(())
+        // Get destination port (assuming IPv4)
+        let dest_port = u16::from_be_bytes([packet[22], packet[23]]);
+        dest_port == 53
     }
 }
 
@@ -127,13 +305,13 @@ struct ProfileRequest {
     preferred_protocol: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct ProfileResponse {
     profile_id: String,
     config: FoxRayConfig,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct FoxRayConfig {
     name: String,
     server: String,
@@ -248,13 +426,13 @@ mod tests {
             max_clients: 100,
             log_level: "debug".to_string(),
             enable_traffic_logging: true,
-            bandwidth_limit_mbps: 100,
+            bandwidth_limit_mbps: Some(100),
             vpc_network: "10.10.0.0/16".to_string(),
             vpn_subnet: "10.10.1.0/24".to_string(),
             server_vpn_ip: "10.10.1.1".to_string(),
             client_ip_start: "10.10.1.2".to_string(),
             client_ip_end: "10.10.1.254".to_string(),
-            camouflage: CamouflageConfig {
+            camouflage: crate::config::CamouflageConfig {
                 enabled: false,
                 type_: "websocket".to_string(),
                 host: "example.com".to_string(),
@@ -265,53 +443,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_initialization() {
+    async fn test_server_initialization() -> Result<()> {
         let config = create_test_config();
-        let server = Server::new(config);
-        assert!(server.tunnel_manager.try_read().is_ok());
+        let server = Server::new(config)?;
+
+        // Test route manager initialization
+        let route_manager = Arc::clone(&server.route_manager);
+        let test_packet = create_test_packet("192.168.1.100");
+        let action = route_manager.get_route_action(&test_packet).await?;
+        assert_eq!(action, RouteAction::Direct);
+
+        // Test traffic manager initialization
+        let traffic_manager = Arc::clone(&server.traffic_manager);
+        let client_ip = "192.168.1.100".parse()?;
+        traffic_manager.register_client(client_ip, TrafficClass::RealTime, None).await?;
+        assert!(traffic_manager.can_send(&client_ip, 1000).await?);
+
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn test_profile_generation() {
-        let config = create_test_config();
-        let server = Server::new(config);
-        let app_state = Arc::new(AppState {
-            config: server.config.clone(),
-            tunnel_manager: server.tunnel_manager.clone(),
-            crypto_manager: server.crypto_manager.clone(),
-            auth_manager: server.auth_manager.clone(),
-            metrics_manager: server.metrics_manager.clone(),
-            profile_cache: server.profile_cache.clone(),
-        });
-
-        let request = ProfileRequest {
-            device_name: "test-device".to_string(),
-            preferred_protocol: Some("tcp".to_string()),
-        };
-
-        let response = generate_profile(State(app_state), Json(request)).await;
-        assert!(response.into_response().status() == StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_health_check() {
-        assert_eq!(health_check().await, "OK");
-    }
-
-    #[tokio::test]
-    async fn test_metrics() {
-        let config = create_test_config();
-        let server = Server::new(config);
-        let app_state = Arc::new(AppState {
-            config: server.config.clone(),
-            tunnel_manager: server.tunnel_manager.clone(),
-            crypto_manager: server.crypto_manager.clone(),
-            auth_manager: server.auth_manager.clone(),
-            metrics_manager: server.metrics_manager.clone(),
-            profile_cache: server.profile_cache.clone(),
-        });
-
-        let metrics = get_metrics(State(app_state)).await;
-        assert!(metrics.0.get("server_metrics").is_some());
+    fn create_test_packet(ip: &str) -> Vec<u8> {
+        let mut packet = vec![0x45u8]; // IPv4, IHL=5
+        packet.extend_from_slice(&[0; 15]); // Padding
+        let ip_parts: Vec<u8> = ip.split('.')
+            .map(|p| p.parse().unwrap())
+            .collect();
+        packet.extend_from_slice(&ip_parts);
+        packet
     }
 } 

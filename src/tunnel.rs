@@ -42,7 +42,7 @@ pub struct ClientInfo {
 }
 
 impl TunnelManager {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: Config) -> Result<Self> {
         let tun = Tun::builder()
             .name("")  // kernel will assign a name
             .up()      // bring the interface up
@@ -63,12 +63,12 @@ impl TunnelManager {
             None
         };
 
-        TunnelManager {
-            config: config.clone(),
+        Ok(TunnelManager {
+            config,
             clients: Arc::new(Mutex::new(HashMap::new())),
             tun_device: Arc::new(tun),
             camouflage,
-        }
+        })
     }
 
     pub async fn run(&mut self) -> Result<()> {

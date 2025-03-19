@@ -19,6 +19,7 @@ use compression::{prelude::*, Compressor, Decompressor};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use httparse;
 
 pub struct HttpProtocol {
     config: ProtocolConfig,
@@ -121,6 +122,23 @@ impl HttpProtocol {
 
         Ok(decoded[8 + padding_len..8 + padding_len + data_len].to_vec())
     }
+
+    fn parse_headers(buffer: &[u8]) -> ProtocolResult<HeaderMap> {
+        let mut headers = [httparse::EMPTY_HEADER; 32];
+        let mut req = httparse::Request::new(&mut headers);
+        
+        req.parse(buffer)
+            .map_err(|e| ProtocolError::ConnectionError(format!("Failed to parse HTTP request: {}", e)))?;
+
+        let mut header_map = HeaderMap::new();
+        for header in req.headers {
+            if let Ok(value) = HeaderValue::from_bytes(header.value) {
+                header_map.insert(header.name, value);
+            }
+        }
+
+        Ok(header_map)
+    }
 }
 
 pub struct HttpTunnel {
@@ -208,7 +226,14 @@ impl Protocol for HttpProtocol {
             .map_err(|e| ProtocolError::ConnectionError(e.to_string()))?;
 
         // Parse session ID from request
-        let session_id = ""; // TODO: Parse from request headers
+        let session_id = if let Some(session_header) = parse_headers(&buffer)?.get("Session-Id") {
+            session_header.to_str()
+                .map_err(|e| ProtocolError::ConnectionError(format!("Invalid session ID: {}", e)))?
+                .to_string()
+        } else {
+            // Generate new session ID if not provided
+            Uuid::new_v4().to_string()
+        };
 
         // Create tunnel
         let tunnel = HttpTunnel::new(

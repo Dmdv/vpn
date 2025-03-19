@@ -6,45 +6,53 @@ authors = ["VPN Server Developer"]
 description = "A high-performance VPN server with FoxRay support"
 
 [dependencies]
+# Async runtime
 tokio = { version = "1.36", features = ["full"] }
-axum = "0.7"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-config = "0.14"
-uuid = { version = "1.7", features = ["v4"] }
-sha2 = "0.10"
-base64 = "0.21"
-rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = "9.2"
-tokio-tun = "0.11"
-ipnetwork = "0.20"
-bytes = "1.5"
-futures = "0.3"
-anyhow = "1.0"
-thiserror = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-dotenv = "0.15"
-tokio-tungstenite = "0.21"
-tungstenite = "0.20"
-http = "1.0"
-headers = "0.3"
-async-trait = "0.1"
-futures-util = "0.3"
-hyper = { version = "1.1", features = ["full"] }
-rustls = "0.21"
 tokio-rustls = "0.24"
+tokio-tungstenite = "0.20"
+tokio-tun = "0.11"
+
+# Networking
+hyper = { version = "0.14", features = ["full"] }
+hyper-rustls = { version = "0.24", features = ["http2"] }
+reqwest = { version = "0.11", features = ["rustls-tls", "json"] }
+trust-dns-proto = "0.22"
+ipnetwork = "0.20"
+
+# Cryptography
+rustls = "0.21"
 rustls-pemfile = "1.0"
 webpki = "0.22"
+webpki-roots = "0.25"
+sha2 = "0.10"
+base64 = "0.21"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging and metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
-compression = "0.1"
+
+# Utilities
+async-trait = "0.1"
+bytes = "1.5"
+futures-util = "0.3"
+regex = "1.10"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 dashmap = "5.5"
+compression = "0.1"
+rand = "0.8"
+httparse = "1.8.0"
 
 [dev-dependencies]
-reqwest = { version = "0.11", features = ["json"] }
 tokio-test = "0.4"
-test-log = "0.2"
-env_logger = "0.10"
+pretty_assertions = "1.4"
