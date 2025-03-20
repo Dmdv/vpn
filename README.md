@@ -1,6 +1,6 @@
 # Rust VPN Server
 
-A high-performance VPN server written in Rust, designed to run on Digital Ocean with FoxRay client support.
+A VPN server written in Rust.
 
 ## Features
 
